@@ -19,39 +19,12 @@
 
 include_recipe 'java'
 
+group node.jetty.group
+
 user node.jetty.user do
   gid   node.jetty.group
   shell '/bin/false'
   home  node.jetty.home
-end
-
-directory node.jetty.cache do
-  owner node.jetty.user
-  group node.jetty.group
-  mode  '755'
-end
-
-directory node.jetty.log_dir do
-  owner node.jetty.user
-  group node.jetty.group
-  mode  '700'
-end
-
-directory "/etc/jetty" do
-  mode '755'
-end
-
-
-[node.jetty.home, "#{node.jetty.home}/contexts", "#{node.jetty.home}/webapps"].each do |d|
-  directory d do
-    owner node.jetty.user
-    group node.jetty.group
-    mode  '755'
-  end
-end
-
-link "#{node.jetty.home}/etc" do
-  to "/etc/jetty"
 end
 
 remote_file node.jetty.download do
@@ -65,25 +38,30 @@ bash 'Unpack Jetty' do
   not_if "test -d #{node.jetty.extracted}"
 end
 
-template '/etc/init.d/jetty' do
-  source 'jetty.initd.erb'
-  mode   '755'
+bash 'Copy Jetty files' do
+  code   "cp -R #{node.jetty.extracted} #{node.jetty.home}"
+  not_if "test -d #{node.jetty.home}"
+end
+
+directory node.jetty.log_dir do
+  owner node.jetty.user
+  group node.jetty.group
+  mode  '755'
+  recursive true
+end
+
+execute "fixup jetty home owner" do
+  command "chown -Rf #{node.jetty.user}:#{node.jetty.group} #{node.jetty.home}"
+  only_if { Etc.getpwuid(File.stat(node.jetty.home).uid).name != node.jetty.user }
+end
+
+bash '/etc/init.d/jetty' do
+  code "cp #{node.jetty.home}/bin/jetty.sh /etc/init.d/jetty"
+  not_if "test -f /etc/init.d/jetty"
 end
 
 service 'jetty' do
   action :nothing
-end
-
-bash 'Copy Lib files' do
-  code   "cp -R #{node.jetty.extracted}/lib #{node.jetty.home}"
-  not_if "test -d #{node.jetty.home}/lib"
-  notifies :restart, resources(:service => 'jetty')
-end
-
-bash 'Copy Start Jar' do
-  code   "cp #{node.jetty.extracted}/start.jar #{node.jetty.home}"
-  not_if "test -f #{node.jetty.home}/start.jar"
-  notifies :restart, resources(:service => 'jetty')
 end
 
 template '/etc/default/jetty' do
@@ -92,24 +70,24 @@ template '/etc/default/jetty' do
   notifies :restart, resources(:service => 'jetty')
 end
 
-if node.jetty.port < 1024
-  include_recipe 'iptables'
+#if node.jetty.port < 1024
+#  include_recipe 'iptables'
+#
+#  node.set[:jetty][:real_port] = node.jetty.hidden_port
+#
+#  template "/etc/iptables.snat" do
+#    source 'iptables.erb'
+#    mode 0644
+#    backup false
+#    variables :source => node.jetty.port , :destination => node.jetty.hidden_port
+#    notifies :run, resources(:execute => "rebuild-iptables")
+#  end
+#else
+#  node.set[:jetty][:real_port] = node.jetty.port
+#end
 
-  node.set[:jetty][:real_port] = node.jetty.hidden_port
-
-  template "/etc/iptables.snat" do
-    source 'iptables.erb'
-    mode 0644
-    backup false
-    variables :source => node.jetty.port , :destination => node.jetty.hidden_port
-    notifies :run, resources(:execute => "rebuild-iptables")
-  end
-else
-  node.set[:jetty][:real_port] = node.jetty.port
-end
-
-%w(jetty.xml webdefault.xml jetty-deploy.xml jetty-logging.xml).each do |f|
-  template "/etc/jetty/#{f}" do
+%w(jetty-logging.xml).each do |f|
+  template "#{node.jetty.home}/etc/#{f}" do
     source "#{f}.erb"
     mode   '644'
     notifies :restart, resources(:service => 'jetty')
@@ -119,5 +97,3 @@ end
 service 'jetty' do
   action [:enable, :start]
 end
-
-
